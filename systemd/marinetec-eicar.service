@@ -1,0 +1,16 @@
+[Unit]
+Description=MarineTec-China EICAR button controller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/opt/marinetec
+ExecStart=/usr/bin/python3 /opt/marinetec/marinetec_eicar_button.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+
