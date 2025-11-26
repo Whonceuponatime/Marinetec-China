@@ -103,11 +103,27 @@ class EicarButtonController:
             # Clean up any existing GPIO state first
             GPIO.setmode(GPIO.BCM)
             GPIO.setwarnings(False)
-            # Cleanup all channels to avoid conflicts
+            
+            # Force cleanup of specific pins
+            try:
+                GPIO.setup(button_pin, GPIO.IN, pull_up_down=GPIO.PUD_OFF)
+                GPIO.cleanup(button_pin)
+            except:
+                pass
+            try:
+                GPIO.setup(led_pin, GPIO.OUT)
+                GPIO.cleanup(led_pin)
+            except:
+                pass
+            
+            # Full cleanup
             try:
                 GPIO.cleanup()
             except:
                 pass
+            
+            # Small delay to let GPIO settle
+            time.sleep(0.2)
             
             # Now set the pin factory
             Device.pin_factory = RPiGPIOFactory()
@@ -137,20 +153,80 @@ class EicarButtonController:
 
         # Button: pulled up internally, active on press (to GND)
         # Add small delay to ensure GPIO is ready
-        time.sleep(0.1)
+        time.sleep(0.2)
         
-        try:
-            self.button = Button(button_pin, pull_up=True, bounce_time=DEBOUNCE_TIME)
-            print(f"[INFO] Button initialized on GPIO {button_pin}")
-        except RuntimeError as e:
-            print(f"[ERROR] Failed to initialize button on GPIO {button_pin}: {e}")
-            print(f"[INFO] GPIO {button_pin} may already be in use.")
-            print(f"[INFO] Try: sudo gpio unexport {button_pin}")
-            print(f"[INFO] Or check if another process is using GPIO {button_pin}")
-            raise
-        except Exception as e:
-            print(f"[ERROR] Unexpected error initializing button: {e}")
-            raise
+        # Try to initialize button with retry logic
+        max_retries = 3
+        button_initialized = False
+        
+        for attempt in range(max_retries):
+            try:
+                print(f"[INFO] Attempting to initialize button on GPIO {button_pin} (attempt {attempt + 1}/{max_retries})...")
+                
+                # Try with explicit pin factory reset
+                if self._gpio_cleanup_needed:
+                    try:
+                        import RPi.GPIO as GPIO
+                        GPIO.setmode(GPIO.BCM)
+                        GPIO.setwarnings(False)
+                        # Remove any existing event detection
+                        try:
+                            GPIO.remove_event_detect(button_pin)
+                        except:
+                            pass
+                        # Cleanup the pin
+                        try:
+                            GPIO.cleanup(button_pin)
+                        except:
+                            pass
+                        time.sleep(0.2)
+                        # Ensure pin is in input mode with pull-up before Button tries to use it
+                        GPIO.setup(button_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+                        time.sleep(0.1)
+                    except Exception as gpio_err:
+                        print(f"[WARN] GPIO setup warning: {gpio_err}")
+                
+                # Try creating button - on last attempt, try without bounce_time
+                if attempt == max_retries - 1:
+                    print(f"[INFO] Final attempt: trying without bounce_time...")
+                    self.button = Button(button_pin, pull_up=True)
+                else:
+                    self.button = Button(button_pin, pull_up=True, bounce_time=DEBOUNCE_TIME)
+                
+                print(f"[INFO] Button initialized successfully on GPIO {button_pin}")
+                button_initialized = True
+                break
+                
+            except RuntimeError as e:
+                if "Failed to add edge detection" in str(e):
+                    print(f"[WARN] Edge detection failed on attempt {attempt + 1}")
+                    if attempt < max_retries - 1:
+                        # Try cleanup and retry
+                        try:
+                            import RPi.GPIO as GPIO
+                            GPIO.cleanup(button_pin)
+                            time.sleep(0.3)
+                        except:
+                            pass
+                        continue
+                    else:
+                        print(f"[ERROR] Failed to initialize button on GPIO {button_pin} after {max_retries} attempts")
+                        print(f"[ERROR] Error: {e}")
+                        print(f"[INFO] Possible causes:")
+                        print(f"[INFO]   1. GPIO {button_pin} hardware issue or not connected")
+                        print(f"[INFO]   2. Another process is using GPIO {button_pin}")
+                        print(f"[INFO]   3. Try rebooting: sudo reboot")
+                        print(f"[INFO]   4. Try a different GPIO pin (edit BUTTON_PIN in script)")
+                        raise
+                else:
+                    print(f"[ERROR] Failed to initialize button: {e}")
+                    raise
+            except Exception as e:
+                print(f"[ERROR] Unexpected error initializing button: {e}")
+                raise
+        
+        if not button_initialized:
+            raise RuntimeError("Failed to initialize button after all retry attempts")
 
         # Avoid overlapping sends
 
