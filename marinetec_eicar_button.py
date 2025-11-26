@@ -72,13 +72,31 @@ TCP_PORT = 80
 
 # GPIO pins (BCM numbering)
 
-BUTTON_PIN = 17   # physical: pin 11
+BUTTON_PIN = 17   # physical: pin 11 - EICAR packet button
 
-LED_PIN = 22      # physical: pin 15
+LED_PIN = 22      # physical: pin 15 - LED indicator (optional)
+
+# SNMP button pins
+
+SNMP_DOWN_PIN = 27   # physical: pin 13 - SNMP port DOWN button
+
+SNMP_UP_PIN = 22     # physical: pin 15 - SNMP port UP button (shares with LED)
 
 # Debounce time (seconds)
 
 DEBOUNCE_TIME = 0.2
+
+# SNMP Configuration
+
+SNMP_TARGET = "192.168.127.10"
+
+SNMP_PORT = 161  # Standard SNMP port
+
+SNMP_COMMUNITY = "private"
+
+SNMP_OID_BASE = "1.3.6.1.2.1.2.2.1.7"  # ifAdminStatus OID
+
+SNMP_IFINDEX = 8  # Interface index (port 8)
 
 # EICAR test string (standard antivirus test pattern)
 
@@ -86,9 +104,9 @@ EICAR_STRING = b"X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE
 
 # ------------------------------------------
 
-class EicarButtonController:
+class MarineTecController:
 
-    def __init__(self, button_pin: int, led_pin: int):
+    def __init__(self, eicar_button_pin: int, snmp_down_pin: int, snmp_up_pin: int, led_pin: int = None):
 
         # Try to use RPi.GPIO factory if available (better for Raspberry Pi)
         # Otherwise fall back to default
@@ -142,119 +160,42 @@ class EicarButtonController:
                 print("[WARN] Or install system package: sudo apt install python3-rpi.gpio")
                 print("[WARN] Then recreate venv with: python3 -m venv --system-site-packages venv")
 
-        # Initialize LED first (simpler, less likely to conflict)
-        try:
-            self.led = LED(led_pin)
-            print(f"[INFO] LED initialized on GPIO {led_pin}")
-        except Exception as e:
-            print(f"[WARN] Failed to initialize LED on GPIO {led_pin}: {e}")
-            print("[WARN] Continuing without LED...")
+        # Initialize LED if provided (optional)
+        # Skip LED if GPIO 22 is used for SNMP UP button
+        if led_pin and led_pin != snmp_up_pin:
+            try:
+                self.led = LED(led_pin)
+                print(f"[INFO] LED initialized on GPIO {led_pin}")
+            except Exception as e:
+                print(f"[WARN] Failed to initialize LED on GPIO {led_pin}: {e}")
+                print("[WARN] Continuing without LED...")
+                self.led = None
+        else:
+            if led_pin == snmp_up_pin:
+                print(f"[INFO] Skipping LED on GPIO {led_pin} (used for SNMP UP button)")
             self.led = None
 
-        # Button: pulled up internally, active on press (to GND)
-        # Add small delay to ensure GPIO is ready
-        time.sleep(0.2)
-        
-        # Try to initialize button with retry logic
-        max_retries = 3
-        button_initialized = False
-        use_polling = False
-        
-        for attempt in range(max_retries):
-            try:
-                print(f"[INFO] Attempting to initialize button on GPIO {button_pin} (attempt {attempt + 1}/{max_retries})...")
-                
-                # Try with explicit pin factory reset
-                if self._gpio_cleanup_needed:
-                    try:
-                        import RPi.GPIO as GPIO
-                        GPIO.setmode(GPIO.BCM)
-                        GPIO.setwarnings(False)
-                        # Remove any existing event detection
-                        try:
-                            GPIO.remove_event_detect(button_pin)
-                        except:
-                            pass
-                        # Cleanup the pin
-                        try:
-                            GPIO.cleanup(button_pin)
-                        except:
-                            pass
-                        time.sleep(0.2)
-                        # Ensure pin is in input mode with pull-up before Button tries to use it
-                        GPIO.setup(button_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-                        time.sleep(0.1)
-                    except Exception as gpio_err:
-                        print(f"[WARN] GPIO setup warning: {gpio_err}")
-                
-                # Try creating button - on last attempt, try without bounce_time
-                if attempt == max_retries - 1:
-                    print(f"[INFO] Final attempt: trying without bounce_time...")
-                    self.button = Button(button_pin, pull_up=True)
-                else:
-                    self.button = Button(button_pin, pull_up=True, bounce_time=DEBOUNCE_TIME)
-                
-                print(f"[INFO] Button initialized successfully on GPIO {button_pin}")
-                button_initialized = True
-                break
-                
-            except RuntimeError as e:
-                if "Failed to add edge detection" in str(e):
-                    print(f"[WARN] Edge detection failed on attempt {attempt + 1}")
-                    if attempt < max_retries - 1:
-                        # Try cleanup and retry
-                        try:
-                            import RPi.GPIO as GPIO
-                            GPIO.cleanup(button_pin)
-                            time.sleep(0.3)
-                        except:
-                            pass
-                        continue
-                    else:
-                        # All attempts failed - use polling fallback
-                        print(f"[WARN] Edge detection failed after {max_retries} attempts")
-                        print(f"[INFO] Falling back to polling mode (less efficient but should work)")
-                        use_polling = True
-                        break
-                else:
-                    print(f"[ERROR] Failed to initialize button: {e}")
-                    raise
-            except Exception as e:
-                print(f"[ERROR] Unexpected error initializing button: {e}")
-                raise
-        
-        # If edge detection failed, use polling fallback
-        if use_polling:
-            print(f"[INFO] Initializing button in polling mode...")
-            try:
-                import RPi.GPIO as GPIO
-                GPIO.setmode(GPIO.BCM)
-                GPIO.setwarnings(False)
-                GPIO.setup(button_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-                self.button_pin = button_pin
-                self.button_state = GPIO.input(button_pin)
-                self.button = None  # No gpiozero Button object
-                print(f"[INFO] Button initialized in polling mode on GPIO {button_pin}")
-                print(f"[INFO] Current button state: {'PRESSED' if not self.button_state else 'RELEASED'}")
-            except Exception as e:
-                print(f"[ERROR] Failed to initialize button even in polling mode: {e}")
-                raise
-        elif not button_initialized:
-            raise RuntimeError("Failed to initialize button after all retry attempts")
+        # Initialize EICAR button
+        print("[INFO] Initializing EICAR button...")
+        self.button = self._init_button(eicar_button_pin, "EICAR")
+        if self.button and hasattr(self.button, 'when_pressed'):
+            self.button.when_pressed = self._on_button_pressed
+        elif self.button and isinstance(self.button, dict) and self.button.get('polling'):
+            # Polling mode for EICAR button
+            self.eicar_button_polling = True
+            self.eicar_button_state = None
+            import RPi.GPIO as GPIO
+            GPIO.setmode(GPIO.BCM)
+            self.eicar_button_state = GPIO.input(eicar_button_pin)
+            print("[INFO] Starting EICAR button polling thread...")
+            self._eicar_polling_thread = threading.Thread(target=self._poll_eicar_button, daemon=True)
+            self._eicar_polling_thread.start()
+        else:
+            print("[WARN] EICAR button initialization failed, continuing without it...")
+            self.button = None
 
         # Avoid overlapping sends
-
         self._busy = False
-        
-        # Set up button callback or polling thread
-        if self.button is not None:
-            # Normal mode: use gpiozero Button with edge detection
-            self.button.when_pressed = self._on_button_pressed
-        else:
-            # Polling mode: start polling thread
-            print("[INFO] Starting button polling thread...")
-            self._polling_thread = threading.Thread(target=self._poll_button, daemon=True)
-            self._polling_thread.start()
 
         # Network configuration
 
@@ -262,27 +203,33 @@ class EicarButtonController:
 
         self.source_mac = get_if_hwaddr(NETWORK_INTERFACE)
 
-        print(f"[INFO] EICAR button controller initialized.")
-
-        print(f"[INFO] Watching GPIO {button_pin} for presses.")
-
+        # Store pins
+        self.eicar_button_pin = eicar_button_pin
+        self.snmp_down_pin = snmp_down_pin
+        self.snmp_up_pin = snmp_up_pin
+        
+        # Initialize SNMP buttons
+        self._init_snmp_buttons()
+        
+        print(f"[INFO] MarineTec controller initialized.")
+        print(f"[INFO] EICAR button: GPIO {eicar_button_pin}")
+        print(f"[INFO] SNMP DOWN button: GPIO {snmp_down_pin}")
+        print(f"[INFO] SNMP UP button: GPIO {snmp_up_pin}")
         print(f"[INFO] Interface: {NETWORK_INTERFACE}")
-
         print(f"[INFO] Source IP: {self.source_ip}")
-
         print(f"[INFO] Source MAC: {self.source_mac}")
+        print(f"[INFO] EICAR Target IP: {TARGET_IP}")
+        print(f"[INFO] SNMP Target: {SNMP_TARGET}:{SNMP_PORT}, Interface Index: {SNMP_IFINDEX}")
 
-        print(f"[INFO] Target IP: {TARGET_IP}")
-
-    def _poll_button(self):
-        """Poll button state when edge detection is not available."""
+    def _poll_eicar_button(self):
+        """Poll EICAR button state when edge detection is not available."""
         import RPi.GPIO as GPIO
-        last_state = self.button_state
+        last_state = self.eicar_button_state
         last_press_time = 0
         
         while True:
             try:
-                current_state = GPIO.input(self.button_pin)
+                current_state = GPIO.input(self.eicar_button_pin)
                 
                 # Detect button press (transition from HIGH to LOW)
                 if last_state == GPIO.HIGH and current_state == GPIO.LOW:
@@ -290,17 +237,230 @@ class EicarButtonController:
                     # Debounce: ignore presses within DEBOUNCE_TIME of last press
                     if current_time - last_press_time > DEBOUNCE_TIME:
                         if not self._busy:
-                            print("[EVENT] Button press detected (polling mode)")
+                            print("[EVENT] EICAR button press detected (polling mode)")
                             self._on_button_pressed()
                             last_press_time = current_time
                 
-                self.button_state = current_state
+                self.eicar_button_state = current_state
                 last_state = current_state
                 time.sleep(0.05)  # Poll every 50ms
                 
             except Exception as e:
-                print(f"[ERROR] Error in button polling: {e}")
+                print(f"[ERROR] Error in EICAR button polling: {e}")
                 time.sleep(0.1)
+    
+    def _init_snmp_buttons(self):
+        """Initialize SNMP port up/down buttons."""
+        print("[INFO] Initializing SNMP buttons...")
+        
+        # Initialize SNMP DOWN button (GPIO 27)
+        self.snmp_down_button = self._init_button(self.snmp_down_pin, "SNMP DOWN")
+        if self.snmp_down_button:
+            if hasattr(self.snmp_down_button, 'when_pressed'):
+                self.snmp_down_button.when_pressed = self._on_snmp_down_pressed
+            else:
+                # Polling mode - handled separately
+                pass
+        
+        # Initialize SNMP UP button (GPIO 22)
+        self.snmp_up_button = self._init_button(self.snmp_up_pin, "SNMP UP")
+        if self.snmp_up_button:
+            if hasattr(self.snmp_up_button, 'when_pressed'):
+                self.snmp_up_button.when_pressed = self._on_snmp_up_pressed
+            else:
+                # Polling mode - handled separately
+                pass
+    
+    def _init_button(self, pin: int, name: str):
+        """Helper to initialize a button with retry logic."""
+        max_retries = 3
+        button_initialized = False
+        use_polling = False
+        
+        for attempt in range(max_retries):
+            try:
+                print(f"[INFO] Initializing {name} button on GPIO {pin} (attempt {attempt + 1}/{max_retries})...")
+                
+                if self._gpio_cleanup_needed:
+                    try:
+                        import RPi.GPIO as GPIO
+                        GPIO.setmode(GPIO.BCM)
+                        GPIO.setwarnings(False)
+                        try:
+                            GPIO.remove_event_detect(pin)
+                        except:
+                            pass
+                        try:
+                            GPIO.cleanup(pin)
+                        except:
+                            pass
+                        time.sleep(0.2)
+                        GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+                        time.sleep(0.1)
+                    except Exception as gpio_err:
+                        print(f"[WARN] GPIO setup warning for {name}: {gpio_err}")
+                
+                if attempt == max_retries - 1:
+                    button = Button(pin, pull_up=True)
+                else:
+                    button = Button(pin, pull_up=True, bounce_time=DEBOUNCE_TIME)
+                
+                print(f"[INFO] {name} button initialized successfully on GPIO {pin}")
+                button_initialized = True
+                return button
+                
+            except RuntimeError as e:
+                if "Failed to add edge detection" in str(e):
+                    if attempt < max_retries - 1:
+                        try:
+                            import RPi.GPIO as GPIO
+                            GPIO.cleanup(pin)
+                            time.sleep(0.3)
+                        except:
+                            pass
+                        continue
+                    else:
+                        print(f"[WARN] Edge detection failed for {name} button, using polling mode")
+                        use_polling = True
+                        break
+                else:
+                    print(f"[WARN] Failed to initialize {name} button: {e}")
+                    return None
+            except Exception as e:
+                print(f"[WARN] Unexpected error initializing {name} button: {e}")
+                return None
+        
+        # Polling mode fallback
+        if use_polling:
+            try:
+                import RPi.GPIO as GPIO
+                GPIO.setmode(GPIO.BCM)
+                GPIO.setwarnings(False)
+                GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+                print(f"[INFO] {name} button initialized in polling mode on GPIO {pin}")
+                # Return a special marker for polling mode
+                return {"pin": pin, "name": name, "polling": True}
+            except Exception as e:
+                print(f"[WARN] Failed to initialize {name} button even in polling mode: {e}")
+                return None
+        
+        return None
+    
+    def _on_snmp_down_pressed(self):
+        """Handle SNMP port DOWN button press."""
+        if self._busy:
+            print("[WARN] SNMP DOWN button pressed while operation in progress — ignoring.")
+            return
+        print("[EVENT] SNMP DOWN button press detected.")
+        t = threading.Thread(target=self._send_snmp_port_down, daemon=True)
+        t.start()
+    
+    def _on_snmp_up_pressed(self):
+        """Handle SNMP port UP button press."""
+        if self._busy:
+            print("[WARN] SNMP UP button pressed while operation in progress — ignoring.")
+            return
+        print("[EVENT] SNMP UP button press detected.")
+        t = threading.Thread(target=self._send_snmp_port_up, daemon=True)
+        t.start()
+    
+    def _send_snmp_port_down(self):
+        """Send SNMP command to bring port DOWN."""
+        self._busy = True
+        if self.led:
+            self.led.on()
+        
+        try:
+            oid = f"{SNMP_OID_BASE}.{SNMP_IFINDEX}"
+            cmd = [
+                "snmpset",
+                "-v2c",
+                "-c", SNMP_COMMUNITY,
+                SNMP_TARGET,
+                oid,
+                "i", "2"  # 2 = down
+            ]
+            
+            print(f"[INFO] Sending SNMP port DOWN command...")
+            print(f"[CMD] {' '.join(cmd)}")
+            
+            start_time = time.time()
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            duration = time.time() - start_time
+            
+            if result.returncode == 0:
+                print(f"[INFO] SNMP port DOWN command sent successfully in {duration:.2f}s")
+                if result.stdout:
+                    print(f"[STDOUT] {result.stdout.strip()}")
+            else:
+                print(f"[ERROR] SNMP command failed with return code {result.returncode}")
+                if result.stderr:
+                    print(f"[STDERR] {result.stderr.strip()}")
+                if result.stdout:
+                    print(f"[STDOUT] {result.stdout.strip()}")
+                    
+        except subprocess.TimeoutExpired:
+            print("[ERROR] SNMP command timed out")
+        except FileNotFoundError:
+            print("[ERROR] snmpset command not found. Install with: sudo apt install snmp")
+        except Exception as e:
+            print(f"[ERROR] Failed to send SNMP port DOWN command: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            if self.led:
+                self.led.off()
+            self._busy = False
+            print("[INFO] Ready for next button press.")
+    
+    def _send_snmp_port_up(self):
+        """Send SNMP command to bring port UP."""
+        self._busy = True
+        if self.led:
+            self.led.on()
+        
+        try:
+            oid = f"{SNMP_OID_BASE}.{SNMP_IFINDEX}"
+            cmd = [
+                "snmpset",
+                "-v2c",
+                "-c", SNMP_COMMUNITY,
+                SNMP_TARGET,
+                oid,
+                "i", "1"  # 1 = up
+            ]
+            
+            print(f"[INFO] Sending SNMP port UP command...")
+            print(f"[CMD] {' '.join(cmd)}")
+            
+            start_time = time.time()
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            duration = time.time() - start_time
+            
+            if result.returncode == 0:
+                print(f"[INFO] SNMP port UP command sent successfully in {duration:.2f}s")
+                if result.stdout:
+                    print(f"[STDOUT] {result.stdout.strip()}")
+            else:
+                print(f"[ERROR] SNMP command failed with return code {result.returncode}")
+                if result.stderr:
+                    print(f"[STDERR] {result.stderr.strip()}")
+                if result.stdout:
+                    print(f"[STDOUT] {result.stdout.strip()}")
+                    
+        except subprocess.TimeoutExpired:
+            print("[ERROR] SNMP command timed out")
+        except FileNotFoundError:
+            print("[ERROR] snmpset command not found. Install with: sudo apt install snmp")
+        except Exception as e:
+            print(f"[ERROR] Failed to send SNMP port UP command: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            if self.led:
+                self.led.off()
+            self._busy = False
+            print("[INFO] Ready for next button press.")
     
     def _get_source_ip(self):
 
@@ -540,15 +700,20 @@ class EicarButtonController:
 
 def main():
 
-    controller = EicarButtonController(
+    controller = MarineTecController(
 
-        button_pin=BUTTON_PIN,
-
+        eicar_button_pin=BUTTON_PIN,
+        snmp_down_pin=SNMP_DOWN_PIN,
+        snmp_up_pin=SNMP_UP_PIN,
         led_pin=LED_PIN,
 
     )
 
-    print("[INFO] MarineTec-China EICAR MVP running. Press Ctrl+C to exit.")
+    print("[INFO] MarineTec-China Controller running. Press Ctrl+C to exit.")
+    print("[INFO] Buttons:")
+    print(f"[INFO]   GPIO {BUTTON_PIN} - EICAR packet")
+    print(f"[INFO]   GPIO {SNMP_DOWN_PIN} - SNMP port DOWN")
+    print(f"[INFO]   GPIO {SNMP_UP_PIN} - SNMP port UP")
 
     try:
 
@@ -567,10 +732,20 @@ def main():
         if hasattr(controller, '_gpio_cleanup_needed') and controller._gpio_cleanup_needed:
             try:
                 import RPi.GPIO as GPIO
-                # Cleanup button pin if in polling mode
-                if hasattr(controller, 'button_pin') and controller.button is None:
+                # Cleanup pins if in polling mode
+                if hasattr(controller, 'eicar_button_polling') and controller.eicar_button_polling:
                     try:
-                        GPIO.cleanup(controller.button_pin)
+                        GPIO.cleanup(controller.eicar_button_pin)
+                    except:
+                        pass
+                if hasattr(controller, 'snmp_down_button') and isinstance(controller.snmp_down_button, dict):
+                    try:
+                        GPIO.cleanup(controller.snmp_down_pin)
+                    except:
+                        pass
+                if hasattr(controller, 'snmp_up_button') and isinstance(controller.snmp_up_button, dict):
+                    try:
+                        GPIO.cleanup(controller.snmp_up_pin)
                     except:
                         pass
                 GPIO.cleanup()

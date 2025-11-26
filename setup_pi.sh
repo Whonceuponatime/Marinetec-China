@@ -30,7 +30,7 @@ sudo apt update
 
 echo ""
 echo "[2/6] Installing system packages..."
-sudo apt install -y python3-pip python3-venv python3-dev python3-rpi.gpio
+sudo apt install -y python3-pip python3-venv python3-dev python3-rpi.gpio snmp
 
 echo ""
 echo "[3/6] Creating virtual environment..."
