@@ -754,72 +754,51 @@ class MarineTecController:
             # Quick port scan to find open port
             target_port = self._scan_open_port(TARGET_IP, timeout=0.3)
             
-            # Resolve target MAC
-
-            target_mac = self._resolve_target_mac(TARGET_IP)
-
-            # Build the EICAR TCP packet
-
             print(f"[INFO] Building EICAR TCP packet...")
+            print(f"[INFO] Using standard TCP socket (OS handles headers, plain TCP data)")
+            print(f"[INFO] Source: {self.source_ip} -> {TARGET_IP}:{target_port}")
 
-            # Use random source port, target port from scan
-            import random
-            source_port = random.randint(1024, 65535)
-
-            print(f"[INFO] Source: {self.source_ip}:{source_port} -> {TARGET_IP}:{target_port}")
-
-            # Create Ethernet frame
-
-            ether = Ether(src=self.source_mac, dst=target_mac)
-
-            # Create IP packet
-
-            ip_pkt = IP(src=self.source_ip, dst=TARGET_IP)
-
-            # Create simple TCP segment with EICAR payload
-            # Plain TCP packet - no encryption, just raw TCP with payload
-            # Using Raw() explicitly ensures the payload is sent as-is, unencrypted
-            # Using PSH flag to push data immediately (like in the example)
-            tcp_pkt = TCP(
-                sport=source_port,
-                dport=target_port,
-                flags="PA",  # PSH+ACK - push data and acknowledge
-                seq=1,        # Start with sequence 1
-                ack=1         # Acknowledge sequence 1
-            ) / Raw(load=EICAR_STRING)
-
-            # Assemble full packet: Ethernet -> IP -> TCP -> Raw Payload
-            # This is a plain, unencrypted TCP packet
-            packet = ether / ip_pkt / tcp_pkt
-
-            print(f"[INFO] Building plain TCP packet (no encryption)...")
-            print(f"[INFO] Packet structure: Ethernet -> IP -> TCP -> Raw Payload")
-            print(f"[INFO] Source: {self.source_ip}:{source_port} -> {TARGET_IP}:{target_port}")
-            print(f"[INFO] TCP flags: PSH+ACK (data packet)")
-            print(f"[INFO] Payload: {len(EICAR_STRING)} bytes of plain EICAR string")
-            print(f"[INFO] EICAR payload preview: {EICAR_STRING[:50].decode('utf-8', errors='ignore')}...")
-            print(f"[INFO] VERIFY: Packet will be sent to destination port {target_port} (NOT port 22)")
-
-            start_time = time.time()
-
-            # Send the packet (plain TCP, no encryption)
-            # Verify packet structure before sending
-            if packet.haslayer(TCP):
-                tcp_layer = packet[TCP]
-                actual_dport = tcp_layer.dport
-                print(f"[INFO] VERIFY: TCP destination port in packet: {actual_dport}")
-                if actual_dport == 22:
-                    print(f"[ERROR] WARNING: Packet destination port is 22 (SSH)! This should not happen!")
-                elif actual_dport == 443:
-                    print(f"[ERROR] WARNING: Packet destination port is 443 (HTTPS)! This should not happen!")
+            # Use standard TCP socket instead of raw packets
+            # This ensures plain TCP data without any encryption layers
+            import socket
             
-            sendp(packet, iface=NETWORK_INTERFACE, verbose=1)
-
+            # Create TCP socket
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(3)  # 3 second timeout
+            
+            # Optional: Bind to source IP if specified
+            if self.source_ip:
+                try:
+                    # Use random source port
+                    import random
+                    source_port = random.randint(1024, 65535)
+                    sock.bind((self.source_ip, source_port))
+                    print(f"[INFO] Bound to source: {self.source_ip}:{source_port}")
+                except Exception as e:
+                    print(f"[WARN] Could not bind to source IP, using system default: {e}")
+            
+            start_time = time.time()
+            
+            # Connect to target (TCP handshake)
+            print(f"[INFO] Connecting to {TARGET_IP}:{target_port}...")
+            sock.connect((TARGET_IP, target_port))
+            
+            # Send EICAR payload as plain TCP data
+            print(f"[INFO] Sending EICAR payload ({len(EICAR_STRING)} bytes)...")
+            print(f"[INFO] EICAR string: {EICAR_STRING.decode('utf-8', errors='ignore')}")
+            
+            # Send the payload - OS handles TCP/IP headers, we just send the data
+            bytes_sent = sock.send(EICAR_STRING)
+            
+            print(f"[INFO] Sent {bytes_sent} bytes of EICAR payload")
+            
+            # Close the socket
+            sock.close()
+            
             duration = time.time() - start_time
 
             print(f"[INFO] EICAR packet sent successfully in {duration:.2f}s")
-
-            print(f"[INFO] EICAR string: {EICAR_STRING.decode('utf-8', errors='ignore')}")
+            print(f"[INFO] Packet sent as plain TCP data (no encryption layers)")
 
         except Exception as e:
 
