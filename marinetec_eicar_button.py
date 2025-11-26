@@ -92,12 +92,26 @@ class EicarButtonController:
 
         # Try to use RPi.GPIO factory if available (better for Raspberry Pi)
         # Otherwise fall back to default
+        self._gpio_cleanup_needed = False
         try:
             # First check if RPi module is available
             import RPi
+            import RPi.GPIO as GPIO
             from gpiozero.pins.rpigpio import RPiGPIOFactory
             from gpiozero import Device
+            
+            # Clean up any existing GPIO state first
+            GPIO.setmode(GPIO.BCM)
+            GPIO.setwarnings(False)
+            # Cleanup all channels to avoid conflicts
+            try:
+                GPIO.cleanup()
+            except:
+                pass
+            
+            # Now set the pin factory
             Device.pin_factory = RPiGPIOFactory()
+            self._gpio_cleanup_needed = True
             print("[INFO] Using RPi.GPIO pin factory")
         except (ImportError, ModuleNotFoundError):
             try:
@@ -112,11 +126,31 @@ class EicarButtonController:
                 print("[WARN] Or install system package: sudo apt install python3-rpi.gpio")
                 print("[WARN] Then recreate venv with: python3 -m venv --system-site-packages venv")
 
+        # Initialize LED first (simpler, less likely to conflict)
+        try:
+            self.led = LED(led_pin)
+            print(f"[INFO] LED initialized on GPIO {led_pin}")
+        except Exception as e:
+            print(f"[WARN] Failed to initialize LED on GPIO {led_pin}: {e}")
+            print("[WARN] Continuing without LED...")
+            self.led = None
+
         # Button: pulled up internally, active on press (to GND)
-
-        self.button = Button(button_pin, pull_up=True, bounce_time=DEBOUNCE_TIME)
-
-        self.led = LED(led_pin)
+        # Add small delay to ensure GPIO is ready
+        time.sleep(0.1)
+        
+        try:
+            self.button = Button(button_pin, pull_up=True, bounce_time=DEBOUNCE_TIME)
+            print(f"[INFO] Button initialized on GPIO {button_pin}")
+        except RuntimeError as e:
+            print(f"[ERROR] Failed to initialize button on GPIO {button_pin}: {e}")
+            print(f"[INFO] GPIO {button_pin} may already be in use.")
+            print(f"[INFO] Try: sudo gpio unexport {button_pin}")
+            print(f"[INFO] Or check if another process is using GPIO {button_pin}")
+            raise
+        except Exception as e:
+            print(f"[ERROR] Unexpected error initializing button: {e}")
+            raise
 
         # Avoid overlapping sends
 
@@ -316,7 +350,8 @@ class EicarButtonController:
 
         self._busy = True
 
-        self.led.on()
+        if self.led:
+            self.led.on()
 
         try:
 
@@ -370,7 +405,8 @@ class EicarButtonController:
 
         finally:
 
-            self.led.off()
+            if self.led:
+                self.led.off()
 
             self._busy = False
 
@@ -399,6 +435,16 @@ def main():
     except KeyboardInterrupt:
 
         print("\n[INFO] Exiting on user request.")
+        
+    finally:
+        # Cleanup GPIO on exit
+        if hasattr(controller, '_gpio_cleanup_needed') and controller._gpio_cleanup_needed:
+            try:
+                import RPi.GPIO as GPIO
+                GPIO.cleanup()
+                print("[INFO] GPIO cleaned up.")
+            except:
+                pass
 
 if __name__ == "__main__":
 
