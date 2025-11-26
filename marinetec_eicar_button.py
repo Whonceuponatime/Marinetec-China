@@ -58,7 +58,7 @@ NETWORK_INTERFACE = "eth0"
 
 # Target IP address
 
-TARGET_IP = "192.168.127.10"
+TARGET_IP = "192.168.127.15"
 
 # Source IP (will auto-detect from interface, or use static if set)
 
