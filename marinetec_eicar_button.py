@@ -48,7 +48,7 @@ import socket
 
 import struct
 
-from scapy.all import get_if_addr, get_if_hwaddr, ARP, Ether, IP, TCP, Raw, sendp, srp
+from scapy.all import get_if_addr, get_if_hwaddr, ARP, Ether, IP, TCP, Raw, sendp, srp, conf
 
 # --------- CONFIGURABLE CONSTANTS ---------
 
@@ -754,51 +754,52 @@ class MarineTecController:
             # Quick port scan to find open port
             target_port = self._scan_open_port(TARGET_IP, timeout=0.3)
             
-            print(f"[INFO] Building EICAR TCP packet...")
-            print(f"[INFO] Using standard TCP socket (OS handles headers, plain TCP data)")
+            # Resolve target MAC (needed for scapy raw packet)
+            target_mac = self._resolve_target_mac(TARGET_IP)
+            
+            print(f"[INFO] Building EICAR TCP packet with scapy...")
             print(f"[INFO] Source: {self.source_ip} -> {TARGET_IP}:{target_port}")
 
-            # Use standard TCP socket instead of raw packets
-            # This ensures plain TCP data without any encryption layers
-            import socket
+            # Use random source port
+            import random
+            source_port = random.randint(1024, 65535)
+
+            # Build packet using scapy - matching the example structure
+            # Ethernet -> IP -> TCP -> Raw Payload
+            ether = Ether(src=self.source_mac, dst=target_mac)
+            ip_pkt = IP(src=self.source_ip, dst=TARGET_IP)
             
-            # Create TCP socket
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(3)  # 3 second timeout
-            
-            # Optional: Bind to source IP if specified
-            if self.source_ip:
-                try:
-                    # Use random source port
-                    import random
-                    source_port = random.randint(1024, 65535)
-                    sock.bind((self.source_ip, source_port))
-                    print(f"[INFO] Bound to source: {self.source_ip}:{source_port}")
-                except Exception as e:
-                    print(f"[WARN] Could not bind to source IP, using system default: {e}")
-            
+            # TCP packet matching the example: FIN+PSH+ACK flags, seq=1, ack=1
+            tcp_pkt = TCP(
+                sport=source_port,
+                dport=target_port,
+                flags="FPA",  # FIN+PSH+ACK (like in the example image)
+                seq=1,        # Sequence number 1
+                ack=1         # Acknowledge sequence 1
+            ) / Raw(load=EICAR_STRING)
+
+            # Assemble full packet
+            packet = ether / ip_pkt / tcp_pkt
+
+            print(f"[INFO] Packet structure: Ethernet -> IP -> TCP -> Raw Payload")
+            print(f"[INFO] TCP flags: FIN+PSH+ACK (matching example)")
+            print(f"[INFO] Source port: {source_port}, Destination port: {target_port}")
+            print(f"[INFO] Payload: {len(EICAR_STRING)} bytes")
+            print(f"[INFO] EICAR string: {EICAR_STRING.decode('utf-8', errors='ignore')}")
+            print(f"[INFO] Sending raw packet on interface {NETWORK_INTERFACE}...")
+
             start_time = time.time()
             
-            # Connect to target (TCP handshake)
-            print(f"[INFO] Connecting to {TARGET_IP}:{target_port}...")
-            sock.connect((TARGET_IP, target_port))
-            
-            # Send EICAR payload as plain TCP data
-            print(f"[INFO] Sending EICAR payload ({len(EICAR_STRING)} bytes)...")
-            print(f"[INFO] EICAR string: {EICAR_STRING.decode('utf-8', errors='ignore')}")
-            
-            # Send the payload - OS handles TCP/IP headers, we just send the data
-            bytes_sent = sock.send(EICAR_STRING)
-            
-            print(f"[INFO] Sent {bytes_sent} bytes of EICAR payload")
-            
-            # Close the socket
-            sock.close()
+            # Send raw packet using scapy (will be visible in Wireshark)
+            # Disable scapy's automatic routing to ensure we use the right interface
+            conf.iface = NETWORK_INTERFACE
+            sendp(packet, iface=NETWORK_INTERFACE, verbose=0)
             
             duration = time.time() - start_time
 
             print(f"[INFO] EICAR packet sent successfully in {duration:.2f}s")
-            print(f"[INFO] Packet sent as plain TCP data (no encryption layers)")
+            print(f"[INFO] Packet sent as raw TCP packet - should be visible in Wireshark")
+            print(f"[INFO] Filter in Wireshark: tcp.port == {target_port} or ip.addr == {TARGET_IP}")
 
         except Exception as e:
 
