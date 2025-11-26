@@ -35,10 +35,14 @@ sudo apt install -y python3-pip python3-venv python3-dev python3-rpi.gpio
 echo ""
 echo "[3/6] Creating virtual environment..."
 if [ ! -d "venv" ]; then
-    python3 -m venv venv
-    echo "Virtual environment created."
+    # Create venv with system site packages to access RPi.GPIO
+    python3 -m venv --system-site-packages venv
+    echo "Virtual environment created with system site packages."
 else
     echo "Virtual environment already exists."
+    echo "Note: If GPIO doesn't work, recreate venv with:"
+    echo "  rm -rf venv"
+    echo "  python3 -m venv --system-site-packages venv"
 fi
 
 echo ""

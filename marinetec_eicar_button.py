@@ -93,19 +93,24 @@ class EicarButtonController:
         # Try to use RPi.GPIO factory if available (better for Raspberry Pi)
         # Otherwise fall back to default
         try:
+            # First check if RPi module is available
+            import RPi
             from gpiozero.pins.rpigpio import RPiGPIOFactory
             from gpiozero import Device
             Device.pin_factory = RPiGPIOFactory()
             print("[INFO] Using RPi.GPIO pin factory")
-        except ImportError:
+        except (ImportError, ModuleNotFoundError):
             try:
+                import pigpio
                 from gpiozero.pins.pigpio import PiGPIOFactory
                 from gpiozero import Device
                 Device.pin_factory = PiGPIOFactory()
                 print("[INFO] Using pigpio pin factory")
-            except ImportError:
+            except (ImportError, ModuleNotFoundError):
                 print("[WARN] RPi.GPIO not available, using default pin factory")
-                print("[WARN] For best results on Raspberry Pi, install: sudo apt install python3-rpi.gpio")
+                print("[WARN] Installing RPi.GPIO in venv: pip install RPi.GPIO")
+                print("[WARN] Or install system package: sudo apt install python3-rpi.gpio")
+                print("[WARN] Then recreate venv with: python3 -m venv --system-site-packages venv")
 
         # Button: pulled up internally, active on press (to GND)
 
