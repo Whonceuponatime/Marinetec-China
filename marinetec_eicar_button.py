@@ -18,7 +18,7 @@ Hardware assumptions (BCM pin numbering):
 
     - One side -> GND
 
-    - Other side -> GPIO 17
+    - Other side -> GPIO 27
 
 - LED (optional, but recommended):
 
@@ -54,7 +54,7 @@ NETWORK_INTERFACE = "eth0"
 
 # GPIO pins (BCM numbering)
 
-BUTTON_PIN = 17   # physical: pin 11
+BUTTON_PIN = 27   # physical: pin 13
 
 LED_PIN = 22      # physical: pin 15
 
@@ -183,4 +183,5 @@ def main():
 if __name__ == "__main__":
 
     main()
+
 
