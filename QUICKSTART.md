@@ -26,7 +26,7 @@ sudo ./venv/bin/python3 marinetec_eicar_button.py
 
 ## Hardware Connections
 
-- **Button**: Connect one side to GPIO 27 (physical pin 13), other side to GND
+- **Button**: Connect one side to GPIO 17 (physical pin 11), other side to GND
 - **LED**: Connect anode (through 220Ω-1kΩ resistor) to GPIO 22 (physical pin 15), cathode to GND
 
 ## Configuration

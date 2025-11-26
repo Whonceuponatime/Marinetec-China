@@ -20,7 +20,7 @@ Hardware assumptions (BCM pin numbering):
 
     - One side -> GND
 
-    - Other side -> GPIO 27
+    - Other side -> GPIO 17
 
 - LED (optional, but recommended):
 
@@ -72,7 +72,7 @@ TCP_PORT = 80
 
 # GPIO pins (BCM numbering)
 
-BUTTON_PIN = 27   # physical: pin 13
+BUTTON_PIN = 17   # physical: pin 11
 
 LED_PIN = 22      # physical: pin 15
 

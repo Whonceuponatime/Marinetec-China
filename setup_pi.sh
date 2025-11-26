@@ -78,7 +78,7 @@ echo ""
 echo "Or the script will generate packets on-the-fly."
 echo ""
 echo "Hardware connections:"
-echo "  Button: GPIO 27 (pin 13) to GND"
+echo "  Button: GPIO 17 (pin 11) to GND"
 echo "  LED: GPIO 22 (pin 15) to GND (through resistor)"
 echo ""
 

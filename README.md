@@ -19,7 +19,7 @@ A Raspberry Pi-based system for generating and sending EICAR test packets via ph
 
 **Button:**
 - One side → GND
-- Other side → GPIO 27 (Physical pin 13)
+- Other side → GPIO 17 (Physical pin 11)
 
 **LED:**
 - Anode (through resistor) → GPIO 22 (Physical pin 15)
@@ -27,7 +27,7 @@ A Raspberry Pi-based system for generating and sending EICAR test packets via ph
 
 ### Physical Pin Reference (40-pin header)
 ```
-GPIO 27 = Physical Pin 13
+GPIO 17 = Physical Pin 11
 GPIO 22 = Physical Pin 15
 ```
 
@@ -166,7 +166,7 @@ Common interface names:
 
 ### Button Not Responding
 - Verify GPIO connections are secure
-- Check that button is connected between GPIO 27 and GND
+- Check that button is connected between GPIO 17 and GND
 - Ensure script is running with sudo privileges
 - Check GPIO permissions: `groups $USER` should include `gpio` or `dialout`
 

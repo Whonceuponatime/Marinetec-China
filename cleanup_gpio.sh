@@ -4,9 +4,9 @@
 
 echo "Cleaning up GPIO pins..."
 
-# GPIO 27 (button)
-if [ -d "/sys/class/gpio/gpio27" ]; then
-    echo "27" > /sys/class/gpio/unexport 2>/dev/null || echo "GPIO 27 already unexported or in use"
+# GPIO 17 (button)
+if [ -d "/sys/class/gpio/gpio17" ]; then
+    echo "17" > /sys/class/gpio/unexport 2>/dev/null || echo "GPIO 17 already unexported or in use"
 fi
 
 # GPIO 22 (LED)
