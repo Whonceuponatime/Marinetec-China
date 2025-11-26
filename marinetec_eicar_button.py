@@ -48,7 +48,7 @@ import socket
 
 import struct
 
-from scapy.all import get_if_addr, get_if_hwaddr, ARP, Ether, IP, TCP, sendp, srp
+from scapy.all import get_if_addr, get_if_hwaddr, ARP, Ether, IP, TCP, Raw, sendp, srp
 
 # --------- CONFIGURABLE CONSTANTS ---------
 
@@ -721,20 +721,29 @@ class MarineTecController:
 
             ip_pkt = IP(src=self.source_ip, dst=TARGET_IP)
 
-            # Create TCP segment with EICAR payload
+            # Create simple TCP segment with EICAR payload
+            # Plain TCP packet - no encryption, just raw TCP with payload
+            # Using Raw() explicitly ensures the payload is sent as-is, unencrypted
+            tcp_pkt = TCP(
+                sport=TCP_PORT,
+                dport=TCP_PORT,
+                flags="PA"  # PSH+ACK - standard flags for data packets
+            ) / Raw(load=EICAR_STRING)
 
-            tcp_pkt = TCP(sport=TCP_PORT, dport=TCP_PORT, flags="PA") / EICAR_STRING
-
-            # Assemble full packet
-
+            # Assemble full packet: Ethernet -> IP -> TCP -> Raw Payload
+            # This is a plain, unencrypted TCP packet
             packet = ether / ip_pkt / tcp_pkt
 
-            print(f"[INFO] Packet built. Sending on {NETWORK_INTERFACE}...")
+            print(f"[INFO] Building plain TCP packet (no encryption)...")
+            print(f"[INFO] Packet structure: Ethernet -> IP -> TCP -> Raw Payload")
+            print(f"[INFO] Source: {self.source_ip}:{TCP_PORT} -> {TARGET_IP}:{TCP_PORT}")
+            print(f"[INFO] TCP flags: PSH+ACK (data packet)")
+            print(f"[INFO] Payload: {len(EICAR_STRING)} bytes of plain EICAR string")
+            print(f"[INFO] EICAR payload preview: {EICAR_STRING[:50].decode('utf-8', errors='ignore')}...")
 
             start_time = time.time()
 
-            # Send the packet
-
+            # Send the packet (plain TCP, no encryption)
             sendp(packet, iface=NETWORK_INTERFACE, verbose=1)
 
             duration = time.time() - start_time
