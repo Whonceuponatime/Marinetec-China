@@ -281,6 +281,58 @@ class MarineTecController:
             else:
                 print("[WARN] SNMP UP button initialized but callback not set")
     
+    def _poll_snmp_down_button(self):
+        """Poll SNMP DOWN button state when edge detection is not available."""
+        import RPi.GPIO as GPIO
+        last_state = GPIO.HIGH
+        last_press_time = 0
+        
+        while True:
+            try:
+                current_state = GPIO.input(self.snmp_down_pin)
+                
+                # Detect button press (transition from HIGH to LOW)
+                if last_state == GPIO.HIGH and current_state == GPIO.LOW:
+                    current_time = time.time()
+                    if current_time - last_press_time > DEBOUNCE_TIME:
+                        if not self._busy:
+                            print("[EVENT] SNMP DOWN button press detected (polling mode)")
+                            self._on_snmp_down_pressed()
+                            last_press_time = current_time
+                
+                last_state = current_state
+                time.sleep(0.05)  # Poll every 50ms
+                
+            except Exception as e:
+                print(f"[ERROR] Error in SNMP DOWN button polling: {e}")
+                time.sleep(0.1)
+    
+    def _poll_snmp_up_button(self):
+        """Poll SNMP UP button state when edge detection is not available."""
+        import RPi.GPIO as GPIO
+        last_state = GPIO.HIGH
+        last_press_time = 0
+        
+        while True:
+            try:
+                current_state = GPIO.input(self.snmp_up_pin)
+                
+                # Detect button press (transition from HIGH to LOW)
+                if last_state == GPIO.HIGH and current_state == GPIO.LOW:
+                    current_time = time.time()
+                    if current_time - last_press_time > DEBOUNCE_TIME:
+                        if not self._busy:
+                            print("[EVENT] SNMP UP button press detected (polling mode)")
+                            self._on_snmp_up_pressed()
+                            last_press_time = current_time
+                
+                last_state = current_state
+                time.sleep(0.05)  # Poll every 50ms
+                
+            except Exception as e:
+                print(f"[ERROR] Error in SNMP UP button polling: {e}")
+                time.sleep(0.1)
+    
     def _init_button(self, pin: int, name: str):
         """Helper to initialize a button with retry logic."""
         max_retries = 3
