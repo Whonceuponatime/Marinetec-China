@@ -4,5 +4,6 @@
 #   sudo apt install -y tcpreplay
 
 gpiozero>=1.6.2
+scapy>=2.4.5
 
 

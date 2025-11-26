@@ -1,6 +1,6 @@
 # MarineTec-China EICAR Button Controller
 
-A Raspberry Pi-based system for replaying EICAR test packets via physical GPIO button control. This MVP allows you to trigger packet replay with a simple button press, with visual feedback via an LED indicator.
+A Raspberry Pi-based system for generating and sending EICAR test packets via physical GPIO button control. This MVP allows you to trigger packet generation and transmission with a simple button press, with visual feedback via an LED indicator. Packets are generated on-the-fly with auto-detected source IP and automatic MAC address resolution.
 
 ## ⚠️ Safety Warning
 
@@ -19,7 +19,7 @@ A Raspberry Pi-based system for replaying EICAR test packets via physical GPIO b
 
 **Button:**
 - One side → GND
-- Other side → GPIO 17 (Physical pin 11)
+- Other side → GPIO 27 (Physical pin 13)
 
 **LED:**
 - Anode (through resistor) → GPIO 22 (Physical pin 15)
@@ -27,7 +27,7 @@ A Raspberry Pi-based system for replaying EICAR test packets via physical GPIO b
 
 ### Physical Pin Reference (40-pin header)
 ```
-GPIO 17 = Physical Pin 11
+GPIO 27 = Physical Pin 13
 GPIO 22 = Physical Pin 15
 ```
 
@@ -39,8 +39,8 @@ GPIO 22 = Physical Pin 15
 # Update package list
 sudo apt update
 
-# Install required tools
-sudo apt install -y tcpreplay python3-gpiozero
+# Install required system packages
+sudo apt install -y python3-gpiozero
 ```
 
 ### 2. Create Project Directory
@@ -51,22 +51,7 @@ sudo mkdir -p /opt/marinetec
 sudo chown -R $USER:$USER /opt/marinetec
 ```
 
-### 3. Place EICAR PCAP File
-
-Copy your EICAR test pcap file to the project directory:
-
-```bash
-# Example (adjust source path as needed):
-cp ~/Downloads/EICAR_test.pcap /opt/marinetec/EICAR_test.pcap
-```
-
-Verify the file exists:
-
-```bash
-ls -lh /opt/marinetec/EICAR_test.pcap
-```
-
-### 4. Install Python Dependencies
+### 3. Install Python Dependencies
 
 If you're running from this repository:
 
@@ -93,12 +78,14 @@ sudo python3 marinetec_eicar_button.py
 ```
 
 **Expected Behavior:**
-- Script initializes and prints configuration information
+- Script initializes and prints configuration information (source IP, MAC, target IP)
 - Pressing the button will:
   1. Turn on the LED
-  2. Execute `tcpreplay` to send EICAR packets on the configured interface
-  3. Turn off the LED when complete
-  4. Print logs to the terminal
+  2. Resolve target MAC address (via ping/ARP if needed)
+  3. Generate EICAR TCP packet with auto-detected source IP
+  4. Send the packet on the configured interface
+  5. Turn off the LED when complete
+  6. Print logs to the terminal
 
 Press `Ctrl+C` to exit.
 
@@ -143,9 +130,11 @@ sudo systemctl disable marinetec-eicar.service
 Edit `marinetec_eicar_button.py` to modify these constants:
 
 ```python
-EICAR_PCAP_PATH = "/opt/marinetec/EICAR_test.pcap"  # Path to your pcap file
 NETWORK_INTERFACE = "eth0"                           # Network interface name
-BUTTON_PIN = 17                                      # GPIO pin for button (BCM)
+TARGET_IP = "192.168.127.10"                        # Target IP address
+SOURCE_IP = None                                     # None = auto-detect, or set to "192.168.127.25"
+TCP_PORT = 80                                        # TCP port for EICAR packet
+BUTTON_PIN = 27                                      # GPIO pin for button (BCM)
 LED_PIN = 22                                         # GPIO pin for LED (BCM)
 DEBOUNCE_TIME = 0.2                                  # Button debounce in seconds
 ```
@@ -167,7 +156,7 @@ Common interface names:
 
 ### Button Not Responding
 - Verify GPIO connections are secure
-- Check that button is connected between GPIO 17 and GND
+- Check that button is connected between GPIO 27 and GND
 - Ensure script is running with sudo privileges
 - Check GPIO permissions: `groups $USER` should include `gpio` or `dialout`
 
@@ -176,11 +165,12 @@ Common interface names:
 - Check resistor value (220Ω-1kΩ recommended)
 - Test LED with a simple script to verify hardware
 
-### tcpreplay Fails
-- Verify pcap file exists at the configured path
+### Packet Send Fails
 - Check network interface name is correct: `ip link show`
 - Ensure interface is up: `sudo ip link set eth0 up`
-- Verify tcpreplay is installed: `which tcpreplay`
+- Verify target IP is reachable: `ping 192.168.127.10`
+- Check that scapy is installed: `python3 -c "import scapy"`
+- Verify source IP detection: Check the startup logs for detected IP
 - Check permissions (script must run as root/sudo)
 
 ### Service Won't Start
@@ -203,9 +193,12 @@ Marinetec-China/
 
 ## Features
 
-- **GPIO Button Control**: Physical button press triggers packet replay
+- **GPIO Button Control**: Physical button press triggers packet generation and send
 - **LED Status Indicator**: Visual feedback during packet transmission
-- **Thread-Safe Operation**: Prevents overlapping replays
+- **Auto IP Detection**: Automatically detects source IP from network interface
+- **Auto MAC Resolution**: Automatically resolves target MAC via ARP/ping
+- **On-the-Fly Generation**: EICAR packets generated dynamically (no pcap file needed)
+- **Thread-Safe Operation**: Prevents overlapping sends
 - **Comprehensive Logging**: Detailed output for debugging
 - **Debounced Input**: Prevents false triggers from button bounce
 - **Graceful Shutdown**: Clean exit on Ctrl+C or service stop
@@ -213,9 +206,11 @@ Marinetec-China/
 ## Technical Details
 
 - **GPIO Library**: Uses `gpiozero` for hardware abstraction
-- **Packet Replay**: Uses `tcpreplay` command-line tool
-- **Threading**: Non-blocking packet replay via threading
+- **Packet Generation**: Uses `scapy` for packet crafting and sending
+- **ARP Resolution**: Automatic MAC address resolution via ping and ARP
+- **Threading**: Non-blocking packet send via threading
 - **Pin Numbering**: BCM (Broadcom) numbering convention
+- **EICAR String**: Standard antivirus test pattern embedded in TCP payload
 
 ## License
 
@@ -226,8 +221,8 @@ This project is for educational and authorized testing purposes only.
 Potential enhancements:
 - Add second button for SNMP up/down toggle
 - Web interface for remote control
-- Multiple pcap file selection
+- Multiple target IP support
 - Configuration via config file
-- Network interface auto-detection
+- Save generated packets to pcap for analysis
 
 
