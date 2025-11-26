@@ -1,7 +1,6 @@
 # Python dependencies for MarineTec-China EICAR Button Controller
 # 
-# Note: tcpreplay is installed via apt, not pip:
-#   sudo apt install -y tcpreplay
+# Note: RPi.GPIO is installed via apt on Raspberry Pi for better GPIO support
 
 gpiozero>=1.6.2
 scapy>=2.4.5
