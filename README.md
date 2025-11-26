@@ -70,12 +70,22 @@ pip3 install gpiozero
 
 ### Manual Execution
 
-Run the script with sudo privileges (required for GPIO and tcpreplay):
+Run the script with sudo privileges (required for GPIO and network access):
 
+**If using a virtual environment:**
 ```bash
-cd /opt/marinetec
+cd ~/Desktop/Marinetec-China  # or your project directory
+source venv/bin/activate  # activate venv (optional, but ensures correct Python)
+sudo ./venv/bin/python3 marinetec_eicar_button.py
+```
+
+**If using system Python:**
+```bash
+cd /opt/marinetec  # or your project directory
 sudo python3 marinetec_eicar_button.py
 ```
+
+**Note:** If you installed packages in a virtual environment, you must use the venv's Python interpreter (`./venv/bin/python3`) with sudo, otherwise it will use the system Python which won't have the packages installed.
 
 **Expected Behavior:**
 - Script initializes and prints configuration information (source IP, MAC, target IP)
