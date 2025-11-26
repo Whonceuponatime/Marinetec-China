@@ -122,17 +122,17 @@ class MarineTecController:
             GPIO.setmode(GPIO.BCM)
             GPIO.setwarnings(False)
             
-            # Force cleanup of specific pins
-            try:
-                GPIO.setup(button_pin, GPIO.IN, pull_up_down=GPIO.PUD_OFF)
-                GPIO.cleanup(button_pin)
-            except:
-                pass
-            try:
-                GPIO.setup(led_pin, GPIO.OUT)
-                GPIO.cleanup(led_pin)
-            except:
-                pass
+            # Force cleanup of specific pins (all pins we'll use)
+            pins_to_cleanup = [eicar_button_pin, snmp_down_pin, snmp_up_pin]
+            if led_pin and led_pin != snmp_up_pin:
+                pins_to_cleanup.append(led_pin)
+            
+            for pin in pins_to_cleanup:
+                try:
+                    GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_OFF)
+                    GPIO.cleanup(pin)
+                except:
+                    pass
             
             # Full cleanup
             try:
@@ -175,6 +175,18 @@ class MarineTecController:
                 print(f"[INFO] Skipping LED on GPIO {led_pin} (used for SNMP UP button)")
             self.led = None
 
+        # Store pins FIRST (before any polling threads start)
+        self.eicar_button_pin = eicar_button_pin
+        self.snmp_down_pin = snmp_down_pin
+        self.snmp_up_pin = snmp_up_pin
+
+        # Avoid overlapping sends
+        self._busy = False
+
+        # Network configuration
+        self.source_ip = self._get_source_ip()
+        self.source_mac = get_if_hwaddr(NETWORK_INTERFACE)
+
         # Initialize EICAR button
         print("[INFO] Initializing EICAR button...")
         self.button = self._init_button(eicar_button_pin, "EICAR")
@@ -193,20 +205,6 @@ class MarineTecController:
         else:
             print("[WARN] EICAR button initialization failed, continuing without it...")
             self.button = None
-
-        # Avoid overlapping sends
-        self._busy = False
-
-        # Network configuration
-
-        self.source_ip = self._get_source_ip()
-
-        self.source_mac = get_if_hwaddr(NETWORK_INTERFACE)
-
-        # Store pins
-        self.eicar_button_pin = eicar_button_pin
-        self.snmp_down_pin = snmp_down_pin
-        self.snmp_up_pin = snmp_up_pin
         
         # Initialize SNMP buttons
         self._init_snmp_buttons()
@@ -258,18 +256,30 @@ class MarineTecController:
         if self.snmp_down_button:
             if hasattr(self.snmp_down_button, 'when_pressed'):
                 self.snmp_down_button.when_pressed = self._on_snmp_down_pressed
+            elif isinstance(self.snmp_down_button, dict) and self.snmp_down_button.get('polling'):
+                # Polling mode for SNMP DOWN button
+                print("[INFO] Starting SNMP DOWN button polling thread...")
+                import RPi.GPIO as GPIO
+                GPIO.setmode(GPIO.BCM)
+                self._snmp_down_polling_thread = threading.Thread(target=self._poll_snmp_down_button, daemon=True)
+                self._snmp_down_polling_thread.start()
             else:
-                # Polling mode - handled separately
-                pass
+                print("[WARN] SNMP DOWN button initialized but callback not set")
         
         # Initialize SNMP UP button (GPIO 22)
         self.snmp_up_button = self._init_button(self.snmp_up_pin, "SNMP UP")
         if self.snmp_up_button:
             if hasattr(self.snmp_up_button, 'when_pressed'):
                 self.snmp_up_button.when_pressed = self._on_snmp_up_pressed
+            elif isinstance(self.snmp_up_button, dict) and self.snmp_up_button.get('polling'):
+                # Polling mode for SNMP UP button
+                print("[INFO] Starting SNMP UP button polling thread...")
+                import RPi.GPIO as GPIO
+                GPIO.setmode(GPIO.BCM)
+                self._snmp_up_polling_thread = threading.Thread(target=self._poll_snmp_up_button, daemon=True)
+                self._snmp_up_polling_thread.start()
             else:
-                # Polling mode - handled separately
-                pass
+                print("[WARN] SNMP UP button initialized but callback not set")
     
     def _init_button(self, pin: int, name: str):
         """Helper to initialize a button with retry logic."""
@@ -732,6 +742,7 @@ def main():
         if hasattr(controller, '_gpio_cleanup_needed') and controller._gpio_cleanup_needed:
             try:
                 import RPi.GPIO as GPIO
+                GPIO.setmode(GPIO.BCM)  # Set mode before cleanup
                 # Cleanup pins if in polling mode
                 if hasattr(controller, 'eicar_button_polling') and controller.eicar_button_polling:
                     try:
@@ -750,7 +761,8 @@ def main():
                         pass
                 GPIO.cleanup()
                 print("[INFO] GPIO cleaned up.")
-            except:
+            except Exception as e:
+                print(f"[WARN] Error during GPIO cleanup: {e}")
                 pass
 
 if __name__ == "__main__":
