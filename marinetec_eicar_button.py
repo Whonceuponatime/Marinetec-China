@@ -158,6 +158,7 @@ class EicarButtonController:
         # Try to initialize button with retry logic
         max_retries = 3
         button_initialized = False
+        use_polling = False
         
         for attempt in range(max_retries):
             try:
@@ -210,14 +211,11 @@ class EicarButtonController:
                             pass
                         continue
                     else:
-                        print(f"[ERROR] Failed to initialize button on GPIO {button_pin} after {max_retries} attempts")
-                        print(f"[ERROR] Error: {e}")
-                        print(f"[INFO] Possible causes:")
-                        print(f"[INFO]   1. GPIO {button_pin} hardware issue or not connected")
-                        print(f"[INFO]   2. Another process is using GPIO {button_pin}")
-                        print(f"[INFO]   3. Try rebooting: sudo reboot")
-                        print(f"[INFO]   4. Try a different GPIO pin (edit BUTTON_PIN in script)")
-                        raise
+                        # All attempts failed - use polling fallback
+                        print(f"[WARN] Edge detection failed after {max_retries} attempts")
+                        print(f"[INFO] Falling back to polling mode (less efficient but should work)")
+                        use_polling = True
+                        break
                 else:
                     print(f"[ERROR] Failed to initialize button: {e}")
                     raise
@@ -225,14 +223,38 @@ class EicarButtonController:
                 print(f"[ERROR] Unexpected error initializing button: {e}")
                 raise
         
-        if not button_initialized:
+        # If edge detection failed, use polling fallback
+        if use_polling:
+            print(f"[INFO] Initializing button in polling mode...")
+            try:
+                import RPi.GPIO as GPIO
+                GPIO.setmode(GPIO.BCM)
+                GPIO.setwarnings(False)
+                GPIO.setup(button_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+                self.button_pin = button_pin
+                self.button_state = GPIO.input(button_pin)
+                self.button = None  # No gpiozero Button object
+                print(f"[INFO] Button initialized in polling mode on GPIO {button_pin}")
+                print(f"[INFO] Current button state: {'PRESSED' if not self.button_state else 'RELEASED'}")
+            except Exception as e:
+                print(f"[ERROR] Failed to initialize button even in polling mode: {e}")
+                raise
+        elif not button_initialized:
             raise RuntimeError("Failed to initialize button after all retry attempts")
 
         # Avoid overlapping sends
 
         self._busy = False
-
-        self.button.when_pressed = self._on_button_pressed
+        
+        # Set up button callback or polling thread
+        if self.button is not None:
+            # Normal mode: use gpiozero Button with edge detection
+            self.button.when_pressed = self._on_button_pressed
+        else:
+            # Polling mode: start polling thread
+            print("[INFO] Starting button polling thread...")
+            self._polling_thread = threading.Thread(target=self._poll_button, daemon=True)
+            self._polling_thread.start()
 
         # Network configuration
 
@@ -252,6 +274,34 @@ class EicarButtonController:
 
         print(f"[INFO] Target IP: {TARGET_IP}")
 
+    def _poll_button(self):
+        """Poll button state when edge detection is not available."""
+        import RPi.GPIO as GPIO
+        last_state = self.button_state
+        last_press_time = 0
+        
+        while True:
+            try:
+                current_state = GPIO.input(self.button_pin)
+                
+                # Detect button press (transition from HIGH to LOW)
+                if last_state == GPIO.HIGH and current_state == GPIO.LOW:
+                    current_time = time.time()
+                    # Debounce: ignore presses within DEBOUNCE_TIME of last press
+                    if current_time - last_press_time > DEBOUNCE_TIME:
+                        if not self._busy:
+                            print("[EVENT] Button press detected (polling mode)")
+                            self._on_button_pressed()
+                            last_press_time = current_time
+                
+                self.button_state = current_state
+                last_state = current_state
+                time.sleep(0.05)  # Poll every 50ms
+                
+            except Exception as e:
+                print(f"[ERROR] Error in button polling: {e}")
+                time.sleep(0.1)
+    
     def _get_source_ip(self):
 
         """Get source IP address from interface or use configured static IP."""
@@ -517,6 +567,12 @@ def main():
         if hasattr(controller, '_gpio_cleanup_needed') and controller._gpio_cleanup_needed:
             try:
                 import RPi.GPIO as GPIO
+                # Cleanup button pin if in polling mode
+                if hasattr(controller, 'button_pin') and controller.button is None:
+                    try:
+                        GPIO.cleanup(controller.button_pin)
+                    except:
+                        pass
                 GPIO.cleanup()
                 print("[INFO] GPIO cleaned up.")
             except:
