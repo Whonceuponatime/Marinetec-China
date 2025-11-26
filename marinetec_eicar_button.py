@@ -589,13 +589,17 @@ class MarineTecController:
         import socket
         
         # Exclude encrypted ports (SSH=22, HTTPS=443) - we need plain TCP
+        # Note: 445 is SMB (plain TCP), so it's OK to use
         encrypted_ports = [22, 443]
         
+        scanned_count = 0
         for port in COMMON_PORTS:
             # Skip encrypted ports
             if port in encrypted_ports:
+                print(f"[DEBUG] Skipping encrypted port: {port}")
                 continue
-                
+            
+            scanned_count += 1
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.settimeout(timeout)
@@ -603,10 +607,15 @@ class MarineTecController:
                 sock.close()
                 
                 if result == 0:
-                    print(f"[INFO] Found open port: {port} (plain TCP)")
+                    print(f"[INFO] Found open port: {port} (plain TCP) - will use this port")
                     return port
+                else:
+                    print(f"[DEBUG] Port {port} is closed or filtered")
             except Exception as e:
+                print(f"[DEBUG] Error scanning port {port}: {e}")
                 continue
+        
+        print(f"[INFO] Scanned {scanned_count} ports, none were open")
         
         print(f"[WARN] No open plain TCP ports found, using default port {TCP_PORT}")
         return TCP_PORT
@@ -789,10 +798,21 @@ class MarineTecController:
             print(f"[INFO] TCP flags: PSH+ACK (data packet)")
             print(f"[INFO] Payload: {len(EICAR_STRING)} bytes of plain EICAR string")
             print(f"[INFO] EICAR payload preview: {EICAR_STRING[:50].decode('utf-8', errors='ignore')}...")
+            print(f"[INFO] VERIFY: Packet will be sent to destination port {target_port} (NOT port 22)")
 
             start_time = time.time()
 
             # Send the packet (plain TCP, no encryption)
+            # Verify packet structure before sending
+            if packet.haslayer(TCP):
+                tcp_layer = packet[TCP]
+                actual_dport = tcp_layer.dport
+                print(f"[INFO] VERIFY: TCP destination port in packet: {actual_dport}")
+                if actual_dport == 22:
+                    print(f"[ERROR] WARNING: Packet destination port is 22 (SSH)! This should not happen!")
+                elif actual_dport == 443:
+                    print(f"[ERROR] WARNING: Packet destination port is 443 (HTTPS)! This should not happen!")
+            
             sendp(packet, iface=NETWORK_INTERFACE, verbose=1)
 
             duration = time.time() - start_time
