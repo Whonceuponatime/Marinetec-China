@@ -66,9 +66,14 @@ TARGET_IP = "192.168.127.10"
 
 SOURCE_IP = None  # None = auto-detect, or set to "192.168.127.25"
 
-# TCP port for EICAR packet
+# TCP port for EICAR packet (will be auto-detected via port scan if SCAN_PORTS is True)
 
-TCP_PORT = 80
+TCP_PORT = 80  # Default fallback port
+
+SCAN_PORTS = True  # Set to True to scan for open ports before sending
+
+# Common ports to scan (in order of priority)
+COMMON_PORTS = [80, 443, 22, 21, 23, 25, 53, 110, 143, 993, 995, 8080, 8443, 3389, 5900]
 
 # GPIO pins (BCM numbering)
 
@@ -572,6 +577,32 @@ class MarineTecController:
 
             raise
 
+    def _scan_open_port(self, target_ip: str, timeout: float = 0.5):
+        """Quickly scan for an open TCP port on the target."""
+        if not SCAN_PORTS:
+            print(f"[INFO] Port scanning disabled, using default port {TCP_PORT}")
+            return TCP_PORT
+        
+        print(f"[INFO] Scanning for open TCP ports on {target_ip}...")
+        
+        import socket
+        
+        for port in COMMON_PORTS:
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(timeout)
+                result = sock.connect_ex((target_ip, port))
+                sock.close()
+                
+                if result == 0:
+                    print(f"[INFO] Found open port: {port}")
+                    return port
+            except Exception as e:
+                continue
+        
+        print(f"[WARN] No open ports found in common ports, using default port {TCP_PORT}")
+        return TCP_PORT
+    
     def _resolve_target_mac(self, target_ip: str):
 
         """Resolve target MAC address via ARP. Ping first to populate ARP cache if needed."""
@@ -703,6 +734,9 @@ class MarineTecController:
 
         try:
 
+            # Quick port scan to find open port
+            target_port = self._scan_open_port(TARGET_IP, timeout=0.3)
+            
             # Resolve target MAC
 
             target_mac = self._resolve_target_mac(TARGET_IP)
@@ -711,7 +745,11 @@ class MarineTecController:
 
             print(f"[INFO] Building EICAR TCP packet...")
 
-            print(f"[INFO] Source: {self.source_ip}:{TCP_PORT} -> {TARGET_IP}:{TCP_PORT}")
+            # Use random source port, target port from scan
+            import random
+            source_port = random.randint(1024, 65535)
+
+            print(f"[INFO] Source: {self.source_ip}:{source_port} -> {TARGET_IP}:{target_port}")
 
             # Create Ethernet frame
 
@@ -725,8 +763,8 @@ class MarineTecController:
             # Plain TCP packet - no encryption, just raw TCP with payload
             # Using Raw() explicitly ensures the payload is sent as-is, unencrypted
             tcp_pkt = TCP(
-                sport=TCP_PORT,
-                dport=TCP_PORT,
+                sport=source_port,
+                dport=target_port,
                 flags="PA"  # PSH+ACK - standard flags for data packets
             ) / Raw(load=EICAR_STRING)
 
@@ -736,7 +774,7 @@ class MarineTecController:
 
             print(f"[INFO] Building plain TCP packet (no encryption)...")
             print(f"[INFO] Packet structure: Ethernet -> IP -> TCP -> Raw Payload")
-            print(f"[INFO] Source: {self.source_ip}:{TCP_PORT} -> {TARGET_IP}:{TCP_PORT}")
+            print(f"[INFO] Source: {self.source_ip}:{source_port} -> {TARGET_IP}:{target_port}")
             print(f"[INFO] TCP flags: PSH+ACK (data packet)")
             print(f"[INFO] Payload: {len(EICAR_STRING)} bytes of plain EICAR string")
             print(f"[INFO] EICAR payload preview: {EICAR_STRING[:50].decode('utf-8', errors='ignore')}...")
