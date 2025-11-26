@@ -48,7 +48,7 @@ import socket
 
 import struct
 
-from scapy.all import get_if_addr, get_if_hwaddr, ARP, Ether, IP, TCP, Raw, sendp, srp, conf
+from scapy.all import get_if_addr, get_if_hwaddr, ARP, Ether, IP, TCP, Raw, sendp, srp, conf, TCPOptions
 
 # --------- CONFIGURABLE CONSTANTS ---------
 
@@ -73,8 +73,8 @@ TCP_PORT = 80  # Default fallback port
 SCAN_PORTS = True  # Set to True to scan for open ports before sending
 
 # Common ports to scan (in order of priority)
-# Exclude encrypted ports (22=SSH, 443=HTTPS) - we want plain TCP
-COMMON_PORTS = [443, 445, 80, 8080, 8000, 3000, 5000, 21, 23, 25, 53, 110, 143, 993, 995, 3389, 5900]
+# Exclude encrypted ports (22=SSH, 443=HTTPS) and SMB (445=NetBIOS) - we want plain TCP
+COMMON_PORTS = [80, 8080, 8000, 3000, 5000, 21, 23, 25, 53, 110, 143, 993, 995, 3389, 5900]
 
 # GPIO pins (BCM numbering)
 
@@ -582,21 +582,32 @@ class MarineTecController:
         """Quickly scan for an open TCP port on the target (excluding encrypted ports)."""
         if not SCAN_PORTS:
             print(f"[INFO] Port scanning disabled, using default port {TCP_PORT}")
+            if TCP_PORT == 22:
+                print(f"[ERROR] Default port is 22 (SSH) - this should never happen!")
             return TCP_PORT
         
-        print(f"[INFO] Scanning for open TCP ports on {target_ip} (excluding encrypted ports)...")
+        print(f"[INFO] Scanning for open TCP ports on {target_ip} (excluding encrypted ports 22, 443, 445)...")
         
         import socket
         
-        # Exclude encrypted ports (SSH=22, HTTPS=443) - we need plain TCP
-        # Note: 445 is SMB (plain TCP), so it's OK to use
-        encrypted_ports = [22, 443]
+        # Exclude encrypted ports (SSH=22, HTTPS=443) and SMB (445=NetBIOS) - we need plain TCP
+        encrypted_ports = [22, 443, 445]
+        
+        # Safety check: ensure 22 is never in COMMON_PORTS
+        if 22 in COMMON_PORTS:
+            print(f"[ERROR] Port 22 found in COMMON_PORTS - removing it!")
+            COMMON_PORTS.remove(22)
         
         scanned_count = 0
         for port in COMMON_PORTS:
-            # Skip encrypted ports
+            # Skip encrypted ports (double-check)
             if port in encrypted_ports:
-                print(f"[DEBUG] Skipping encrypted port: {port}")
+                print(f"[DEBUG] Skipping encrypted/SMB port: {port}")
+                continue
+            
+            # Explicit check for port 22
+            if port == 22:
+                print(f"[ERROR] Port 22 detected in scan loop - skipping!")
                 continue
             
             scanned_count += 1
@@ -607,10 +618,15 @@ class MarineTecController:
                 sock.close()
                 
                 if result == 0:
+                    # Final safety check
+                    if port == 22:
+                        print(f"[ERROR] Port 22 was found as open - this should never happen!")
+                        continue
                     print(f"[INFO] Found open port: {port} (plain TCP) - will use this port")
+                    print(f"[INFO] VERIFIED: Port {port} is NOT 22, 443, or 445")
                     return port
                 else:
-                    print(f"[DEBUG] Port {port} is closed or filtered")
+                    print(f"[DEBUG] Port {port} is closed or filtered (Result: {result})")
             except Exception as e:
                 print(f"[DEBUG] Error scanning port {port}: {e}")
                 continue
@@ -618,6 +634,9 @@ class MarineTecController:
         print(f"[INFO] Scanned {scanned_count} ports, none were open")
         
         print(f"[WARN] No open plain TCP ports found, using default port {TCP_PORT}")
+        if TCP_PORT == 22:
+            print(f"[ERROR] Default port is 22 (SSH) - changing to 80!")
+            return 80
         return TCP_PORT
     
     def _resolve_target_mac(self, target_ip: str):
@@ -750,56 +769,73 @@ class MarineTecController:
             self.led.on()
 
         try:
-
-            # Quick port scan to find open port
-            target_port = self._scan_open_port(TARGET_IP, timeout=0.3)
+            # Exact packet structure as specified:
+            # Source: 192.168.127.25:5566 → Destination: 192.168.127.15:41312
+            # TCP Flags: FIN, PSH, ACK
+            # Seq=1, Ack=1, Win=509, Len=74
+            # TCP Timestamp: TSval=3267583673 TSecr=4272320793
             
-            # Resolve target MAC (needed for scapy raw packet)
+            print(f"[INFO] Building exact EICAR TCP packet structure...")
+            print(f"[INFO] Source: {self.source_ip}:5566 → Destination: {TARGET_IP}:41312")
+            print(f"[INFO] TCP Flags: FIN, PSH, ACK | Seq=1, Ack=1, Win=509")
+            
+            # Resolve target MAC address
             target_mac = self._resolve_target_mac(TARGET_IP)
             
-            print(f"[INFO] Building EICAR TCP packet with scapy...")
-            print(f"[INFO] Source: {self.source_ip} -> {TARGET_IP}:{target_port}")
-
-            # Use random source port
-            import random
-            source_port = random.randint(1024, 65535)
-
-            # Build packet using scapy - matching the example structure
-            # Ethernet -> IP -> TCP -> Raw Payload
+            # EICAR test string
+            eicar_string = EICAR_STRING.decode('utf-8', errors='ignore')
+            payload_bytes = EICAR_STRING  # Already bytes
+            
+            print(f"[INFO] EICAR payload: {len(payload_bytes)} bytes")
+            print(f"[INFO] EICAR string: {eicar_string}")
+            
+            # Build exact packet structure using scapy
+            # Ethernet layer
             ether = Ether(src=self.source_mac, dst=target_mac)
+            
+            # IP layer
             ip_pkt = IP(src=self.source_ip, dst=TARGET_IP)
             
-            # TCP packet matching the example: FIN+PSH+ACK flags, seq=1, ack=1
+            # TCP layer with exact specifications
+            # TCP Timestamp option format in scapy: (kind, (value1, value2))
+            # Kind 8 = TCP Timestamp option
+            # Values: TSval=3267583673, TSecr=4272320793
+            tcp_options = [
+                (8, (3267583673, 4272320793))  # TCP Timestamp: (kind=8, (TSval, TSecr))
+            ]
+            
             tcp_pkt = TCP(
-                sport=source_port,
-                dport=target_port,
-                flags="FPA",  # FIN+PSH+ACK (like in the example image)
-                seq=1,        # Sequence number 1
-                ack=1         # Acknowledge sequence 1
-            ) / Raw(load=EICAR_STRING)
-
-            # Assemble full packet
+                sport=5566,           # Source port: 5566
+                dport=41312,          # Destination port: 41312
+                flags="FPA",         # FIN, PSH, ACK flags
+                seq=1,               # Sequence number: 1
+                ack=1,               # Acknowledgment number: 1
+                window=509,          # Window size: 509
+                options=tcp_options   # TCP Timestamp options
+            ) / Raw(load=payload_bytes)
+            
+            # Verify packet length matches (should be 74 bytes for payload)
+            # EICAR string is 68 bytes, but packet shows Len=74 (includes TCP header overhead)
+            print(f"[INFO] TCP packet length: {len(tcp_pkt)} bytes")
+            
+            # Assemble full packet: Ethernet -> IP -> TCP -> Raw Payload
             packet = ether / ip_pkt / tcp_pkt
-
+            
             print(f"[INFO] Packet structure: Ethernet -> IP -> TCP -> Raw Payload")
-            print(f"[INFO] TCP flags: FIN+PSH+ACK (matching example)")
-            print(f"[INFO] Source port: {source_port}, Destination port: {target_port}")
-            print(f"[INFO] Payload: {len(EICAR_STRING)} bytes")
-            print(f"[INFO] EICAR string: {EICAR_STRING.decode('utf-8', errors='ignore')}")
+            print(f"[INFO] TCP Timestamp: TSval=3267583673, TSecr=4272320793")
             print(f"[INFO] Sending raw packet on interface {NETWORK_INTERFACE}...")
-
+            
             start_time = time.time()
             
             # Send raw packet using scapy (will be visible in Wireshark)
-            # Disable scapy's automatic routing to ensure we use the right interface
             conf.iface = NETWORK_INTERFACE
             sendp(packet, iface=NETWORK_INTERFACE, verbose=0)
             
             duration = time.time() - start_time
-
+            
             print(f"[INFO] EICAR packet sent successfully in {duration:.2f}s")
-            print(f"[INFO] Packet sent as raw TCP packet - should be visible in Wireshark")
-            print(f"[INFO] Filter in Wireshark: tcp.port == {target_port} or ip.addr == {TARGET_IP}")
+            print(f"[INFO] Packet matches exact structure: 5566 → 41312 [FIN, PSH, ACK] Seq=1 Ack=1 Win=509")
+            print(f"[INFO] Filter in Wireshark: tcp.port == 41312 and ip.addr == {TARGET_IP}")
 
         except Exception as e:
 
