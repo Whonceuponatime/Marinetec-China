@@ -73,7 +73,8 @@ TCP_PORT = 80  # Default fallback port
 SCAN_PORTS = True  # Set to True to scan for open ports before sending
 
 # Common ports to scan (in order of priority)
-COMMON_PORTS = [80, 443, 22, 21, 23, 25, 53, 110, 143, 993, 995, 8080, 8443, 3389, 5900]
+# Exclude encrypted ports (22=SSH, 443=HTTPS) - we want plain TCP
+COMMON_PORTS = [443, 445, 80, 8080, 8000, 3000, 5000, 21, 23, 25, 53, 110, 143, 993, 995, 3389, 5900]
 
 # GPIO pins (BCM numbering)
 
@@ -577,17 +578,24 @@ class MarineTecController:
 
             raise
 
-    def _scan_open_port(self, target_ip: str, timeout: float = 0.5):
-        """Quickly scan for an open TCP port on the target."""
+    def _scan_open_port(self, target_ip: str, timeout: float = 0.3):
+        """Quickly scan for an open TCP port on the target (excluding encrypted ports)."""
         if not SCAN_PORTS:
             print(f"[INFO] Port scanning disabled, using default port {TCP_PORT}")
             return TCP_PORT
         
-        print(f"[INFO] Scanning for open TCP ports on {target_ip}...")
+        print(f"[INFO] Scanning for open TCP ports on {target_ip} (excluding encrypted ports)...")
         
         import socket
         
+        # Exclude encrypted ports (SSH=22, HTTPS=443) - we need plain TCP
+        encrypted_ports = [22, 443]
+        
         for port in COMMON_PORTS:
+            # Skip encrypted ports
+            if port in encrypted_ports:
+                continue
+                
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.settimeout(timeout)
@@ -595,12 +603,12 @@ class MarineTecController:
                 sock.close()
                 
                 if result == 0:
-                    print(f"[INFO] Found open port: {port}")
+                    print(f"[INFO] Found open port: {port} (plain TCP)")
                     return port
             except Exception as e:
                 continue
         
-        print(f"[WARN] No open ports found in common ports, using default port {TCP_PORT}")
+        print(f"[WARN] No open plain TCP ports found, using default port {TCP_PORT}")
         return TCP_PORT
     
     def _resolve_target_mac(self, target_ip: str):
@@ -762,10 +770,13 @@ class MarineTecController:
             # Create simple TCP segment with EICAR payload
             # Plain TCP packet - no encryption, just raw TCP with payload
             # Using Raw() explicitly ensures the payload is sent as-is, unencrypted
+            # Using PSH flag to push data immediately (like in the example)
             tcp_pkt = TCP(
                 sport=source_port,
                 dport=target_port,
-                flags="PA"  # PSH+ACK - standard flags for data packets
+                flags="PA",  # PSH+ACK - push data and acknowledge
+                seq=1,        # Start with sequence 1
+                ack=1         # Acknowledge sequence 1
             ) / Raw(load=EICAR_STRING)
 
             # Assemble full packet: Ethernet -> IP -> TCP -> Raw Payload
