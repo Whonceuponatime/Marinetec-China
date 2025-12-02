@@ -16,7 +16,6 @@ import time
 import socket
 import struct
 from scapy.all import get_if_addr, get_if_hwaddr, ARP, Ether, IP, TCP, Raw, sendp, srp, conf, TCPOptions
-from scapy.arch import get_if_raw_hwaddr
 
 NETWORK_INTERFACE = "eth0"
 TARGET_IP = "192.168.127.15"
@@ -503,23 +502,34 @@ class MarineTecController:
         if self.led:
             self.led.on()
         try:
-            print(f"[INFO] Building exact EICAR TCP packet structure...")
-            print(f"[INFO] Source: {self.source_ip}:5566 → Destination: {TARGET_IP}:41312")
+            target_port = self._scan_open_port(TARGET_IP)
+            if target_port in [22, 443, 445]:
+                print(f"[ERROR] Scanned port {target_port} is encrypted - this should never happen!")
+                print(f"[ERROR] Falling back to port 80")
+                target_port = 80
+            print(f"[INFO] Using open TCP port {target_port} for EICAR packet (NOT encrypted)")
+            import random
+            source_port = random.randint(49152, 65535)
+            while source_port in [22, 443, 445]:
+                source_port = random.randint(49152, 65535)
+            print(f"[INFO] Building plain TCP EICAR packet...")
+            print(f"[INFO] Source: {self.source_ip}:{source_port} → Destination: {TARGET_IP}:{target_port}")
             print(f"[INFO] TCP Flags: FIN, PSH, ACK | Seq=1, Ack=1, Win=509")
+            print(f"[INFO] Port {target_port} is confirmed open and NOT encrypted (not 22, 443, or 445)")
             target_mac = self._resolve_target_mac(TARGET_IP)
             payload_bytes = EICAR_STRING
             print(f"[INFO] EICAR payload: {len(payload_bytes)} bytes")
-            print(f"[INFO] Payload starts with: {payload_bytes[:20].hex()}")
+            print(f"[INFO] Payload (plain text): {payload_bytes.decode('utf-8', errors='ignore')[:50]}...")
             ether = Ether(src=self.source_mac, dst=target_mac)
-            ip_pkt = IP(src=self.source_ip, dst=TARGET_IP, ttl=64)
+            ip_pkt = IP(src=self.source_ip, dst=TARGET_IP, ttl=64, flags="DF")
             tcp_options = [
                 (1, None),
                 (1, None),
                 (8, (3267583673, 4272320793))
             ]
             tcp_pkt = TCP(
-                sport=5566,
-                dport=41312,
+                sport=source_port,
+                dport=target_port,
                 flags="FPA",
                 seq=1,
                 ack=1,
@@ -528,21 +538,22 @@ class MarineTecController:
             ) / Raw(load=payload_bytes)
             print(f"[INFO] TCP packet length: {len(tcp_pkt)} bytes")
             packet = ether / ip_pkt / tcp_pkt
-            packet = packet.__class__(bytes(packet))
-            print(f"[INFO] Packet structure: Ethernet -> IP -> TCP -> Raw Payload")
+            print(f"[INFO] Packet structure: Ethernet -> IP -> TCP -> Raw Payload (PLAIN TEXT)")
             print(f"[INFO] TCP Timestamp: TSval=3267583673, TSecr=4272320793")
-            print(f"[INFO] Sending raw packet on interface {NETWORK_INTERFACE}...")
-            print(f"[INFO] Using Layer 2 raw socket (bypasses OS TCP stack)...")
-            start_time = time.time()
+            print(f"[INFO] Configuring scapy for raw Layer 2 sending (bypasses OS TCP stack)...")
             conf.iface = NETWORK_INTERFACE
             conf.checkIPaddr = False
             conf.verb = 0
             conf.use_pcap = False
-            sendp(packet, iface=NETWORK_INTERFACE, verbose=0)
+            print(f"[INFO] Sending raw Layer 2 packet (Ethernet frame) on interface {NETWORK_INTERFACE}...")
+            print(f"[INFO] This bypasses the OS TCP/IP stack completely - packet is sent as-is")
+            start_time = time.time()
+            sendp(packet, iface=NETWORK_INTERFACE, verbose=0, realtime=False)
             duration = time.time() - start_time
             print(f"[INFO] EICAR packet sent successfully in {duration:.2f}s")
-            print(f"[INFO] Packet matches exact structure: 5566 → 41312 [FIN, PSH, ACK] Seq=1 Ack=1 Win=509")
-            print(f"[INFO] Filter in Wireshark: tcp.port == 41312 and ip.addr == {TARGET_IP}")
+            print(f"[INFO] Plain TCP packet: {source_port} → {target_port} [FIN, PSH, ACK] Seq=1 Ack=1 Win=509")
+            print(f"[INFO] Wireshark filter: tcp.port == {target_port} and ip.addr == {TARGET_IP}")
+            print(f"[INFO] Expected: Plain TCP packet with EICAR payload visible in Wireshark")
         except PermissionError as e:
             print(f"[ERROR] Permission denied: Raw packet sending requires root privileges")
             print(f"[ERROR] Please run the script with: sudo python3 marinetec_eicar_button.py")
@@ -564,6 +575,19 @@ class MarineTecController:
             print("[INFO] Ready for next button press.")
 
 def main():
+    print("                           _______                   __    __                               ")
+    print("                          |       \\                 |  \\  |  \\                              ")
+    print("  ______    ______        | $$$$$$$\\  ______        | $$  | $$  ______   _______    ______  ")
+    print(" /      \\  /      \\       | $$  | $$ /      \\       | $$__| $$ /      \\ |       \\  /      \\ ")
+    print("|  $$$$$$\\|  $$$$$$\\      | $$  | $$|  $$$$$$\\      | $$    $$|  $$$$$$\\| $$$$$$$\\|  $$$$$$\\")
+    print("| $$  | $$| $$  | $$      | $$  | $$| $$   \\$$      | $$$$$$$$| $$  | $$| $$  | $$| $$  | $$")
+    print("| $$__| $$| $$__/ $$      | $$__/ $$| $$            | $$  | $$| $$__/ $$| $$  | $$| $$__| $$")
+    print(" \\$$    $$ \\$$    $$      | $$    $$| $$            | $$  | $$ \\$$    $$| $$  | $$ \\$$    $$")
+    print(" _\\$$$$$$$  \\$$$$$$        \\$$$$$$$  \\$$             \\$$   \\$$  \\$$$$$$  \\$$   \\$$ _\\$$$$$$$")
+    print("|  \\__| $$                                                                        |  \\__| $$")
+    print(" \\$$    $$                                                                         \\$$    $$")
+    print("  \\$$$$$$                                                                           \\$$$$$$ ")
+    print("")
     controller = MarineTecController(
         eicar_button_pin=BUTTON_PIN,
         snmp_down_pin=SNMP_DOWN_PIN,
