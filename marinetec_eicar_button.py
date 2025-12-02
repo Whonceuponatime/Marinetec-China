@@ -1,5 +1,14 @@
 #!/usr/bin/env python3
 
+import os
+import sys
+
+if os.geteuid() != 0:
+    print("[ERROR] This script must be run with root privileges (sudo)")
+    print("[ERROR] Raw packet sending requires root access")
+    print("[ERROR] Please run: sudo python3 marinetec_eicar_button.py")
+    sys.exit(1)
+
 from gpiozero import Button, LED
 import subprocess
 import threading
@@ -527,6 +536,16 @@ class MarineTecController:
             print(f"[INFO] EICAR packet sent successfully in {duration:.2f}s")
             print(f"[INFO] Packet matches exact structure: 5566 → 41312 [FIN, PSH, ACK] Seq=1 Ack=1 Win=509")
             print(f"[INFO] Filter in Wireshark: tcp.port == 41312 and ip.addr == {TARGET_IP}")
+        except PermissionError as e:
+            print(f"[ERROR] Permission denied: Raw packet sending requires root privileges")
+            print(f"[ERROR] Please run the script with: sudo python3 marinetec_eicar_button.py")
+            print(f"[ERROR] Details: {e}")
+        except OSError as e:
+            if "Permission denied" in str(e) or "Operation not permitted" in str(e):
+                print(f"[ERROR] Permission denied: Raw packet sending requires root privileges")
+                print(f"[ERROR] Please run the script with: sudo python3 marinetec_eicar_button.py")
+            else:
+                print(f"[ERROR] Network error: {e}")
         except Exception as e:
             print(f"[ERROR] Failed to send EICAR packet: {e}")
             import traceback
