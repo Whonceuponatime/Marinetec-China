@@ -16,10 +16,11 @@ import time
 import socket
 import struct
 from scapy.all import get_if_addr, get_if_hwaddr, ARP, Ether, IP, TCP, Raw, sendp, srp, conf, TCPOptions
+from scapy.arch import get_if_raw_hwaddr
 
 NETWORK_INTERFACE = "eth0"
 TARGET_IP = "192.168.127.15"
-SOURCE_IP = None
+SOURCE_IP = "192.168.127.25"
 TCP_PORT = 80
 SCAN_PORTS = True
 COMMON_PORTS = [80, 8080, 8000, 3000, 5000, 21, 23, 25, 53, 110, 143, 993, 995, 3389, 5900]
@@ -506,13 +507,14 @@ class MarineTecController:
             print(f"[INFO] Source: {self.source_ip}:5566 → Destination: {TARGET_IP}:41312")
             print(f"[INFO] TCP Flags: FIN, PSH, ACK | Seq=1, Ack=1, Win=509")
             target_mac = self._resolve_target_mac(TARGET_IP)
-            eicar_string = EICAR_STRING.decode('utf-8', errors='ignore')
             payload_bytes = EICAR_STRING
             print(f"[INFO] EICAR payload: {len(payload_bytes)} bytes")
-            print(f"[INFO] EICAR string: {eicar_string}")
+            print(f"[INFO] Payload starts with: {payload_bytes[:20].hex()}")
             ether = Ether(src=self.source_mac, dst=target_mac)
-            ip_pkt = IP(src=self.source_ip, dst=TARGET_IP)
+            ip_pkt = IP(src=self.source_ip, dst=TARGET_IP, ttl=64)
             tcp_options = [
+                (1, None),
+                (1, None),
                 (8, (3267583673, 4272320793))
             ]
             tcp_pkt = TCP(
@@ -526,11 +528,16 @@ class MarineTecController:
             ) / Raw(load=payload_bytes)
             print(f"[INFO] TCP packet length: {len(tcp_pkt)} bytes")
             packet = ether / ip_pkt / tcp_pkt
+            packet = packet.__class__(bytes(packet))
             print(f"[INFO] Packet structure: Ethernet -> IP -> TCP -> Raw Payload")
             print(f"[INFO] TCP Timestamp: TSval=3267583673, TSecr=4272320793")
             print(f"[INFO] Sending raw packet on interface {NETWORK_INTERFACE}...")
+            print(f"[INFO] Using Layer 2 raw socket (bypasses OS TCP stack)...")
             start_time = time.time()
             conf.iface = NETWORK_INTERFACE
+            conf.checkIPaddr = False
+            conf.verb = 0
+            conf.use_pcap = False
             sendp(packet, iface=NETWORK_INTERFACE, verbose=0)
             duration = time.time() - start_time
             print(f"[INFO] EICAR packet sent successfully in {duration:.2f}s")

@@ -1,7 +1,2 @@
-# Python dependencies for MarineTec-China EICAR Button Controller
-# Note: RPi.GPIO is installed system-wide via apt and accessed via --system-site-packages venv
-
 gpiozero>=1.6.2
 scapy>=2.4.5
-
-
